@@ -12,6 +12,12 @@
 - **Naming:** PascalCase types, camelCase vars.
 - **Error Handling:** `do-try-catch` (no force unwraps).
 
+## Git Workflow
+- **Commit Messages:** Follow [Conventional Commits](https://www.conventionalcommits.org/).
+  - Format: `<type>[optional scope]: <description>`
+  - Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+  - Example: `feat(audio): add noise cancellation`
+
 ## Architectural Context
 - **Source of Truth:** Adhere strictly to `docs/architecture-specification.md`.
 - **Reproducibility:** Follow `docs/reproducibility.md`.
