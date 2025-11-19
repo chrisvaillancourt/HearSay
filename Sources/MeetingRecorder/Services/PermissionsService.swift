@@ -1,25 +1,25 @@
-import Foundation
 import AVFoundation
-import ScreenCaptureKit
-import CoreGraphics
 import AppKit
+import CoreGraphics
+import Foundation
+import ScreenCaptureKit
 
 @MainActor
 class PermissionsService: ObservableObject {
     @Published var hasMicrophoneAccess: Bool = false
     @Published var hasScreenRecordingAccess: Bool = false
     @Published var hasCameraAccess: Bool = false
-    
+
     init() {
         checkPermissions()
     }
-    
+
     func checkPermissions() {
         checkMicrophoneAccess()
         checkCameraAccess()
         checkScreenRecordingAccess()
     }
-    
+
     func requestMicrophoneAccess() {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             Task { @MainActor in
@@ -27,7 +27,7 @@ class PermissionsService: ObservableObject {
             }
         }
     }
-    
+
     func requestCameraAccess() {
         AVCaptureDevice.requestAccess(for: .video) { granted in
             Task { @MainActor in
@@ -35,7 +35,7 @@ class PermissionsService: ObservableObject {
             }
         }
     }
-    
+
     private func checkMicrophoneAccess() {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
@@ -44,7 +44,7 @@ class PermissionsService: ObservableObject {
             hasMicrophoneAccess = false
         }
     }
-    
+
     private func checkCameraAccess() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -53,7 +53,7 @@ class PermissionsService: ObservableObject {
             hasCameraAccess = false
         }
     }
-    
+
     private func checkScreenRecordingAccess() {
         // Modern check for macOS 15+
         Task {
@@ -69,7 +69,7 @@ class PermissionsService: ObservableObject {
             }
         }
     }
-    
+
     func openSystemSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenRecording") {
             NSWorkspace.shared.open(url)

@@ -1,5 +1,5 @@
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 struct SessionListView: View {
     @Environment(\.modelContext) private var modelContext
@@ -35,7 +35,7 @@ struct SessionListView: View {
                 VStack {
                     Text("Details for \(session.title)")
                     Text("Duration: \(Duration.seconds(session.duration).formatted())")
-                    
+
                     List(session.segments) { segment in
                         HStack {
                             Text(segment.speakerLabel)
