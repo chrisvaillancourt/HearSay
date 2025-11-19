@@ -18,12 +18,21 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
     // ScreenCaptureKit
     private var stream: SCStream?
     
+    // Audio Processing
+    let audioProcessor = AudioProcessor()
+    let transcriptionService = TranscriptionService()
+    
     // State
     @MainActor @Published var isRecording = false
     @MainActor @Published var error: String?
     
     override init() {
         super.init()
+        // Initialize services
+        Task {
+            await audioProcessor.setTranscriptionService(transcriptionService)
+            try? await transcriptionService.initialize()
+        }
         setupAVSession()
     }
     
@@ -144,7 +153,21 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
 extension CaptureService: AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptureVideoDataOutputSampleBufferDelegate, SCStreamOutput {
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         if output is AVCaptureAudioDataOutput {
-            // Handle Mic Audio
+            guard let pcmBuffer = AudioUtils.convert(sampleBuffer: sampleBuffer),
+                  let floatChannelData = pcmBuffer.floatChannelData else { return }
+            
+            let frameLength = Int(pcmBuffer.frameLength)
+            let channelData = floatChannelData[0]
+            
+            // Create a copy of the data to pass to the actor
+            var samples = [Float](repeating: 0, count: frameLength)
+            for i in 0..<frameLength {
+                samples[i] = channelData[i]
+            }
+            
+            Task {
+                await self.audioProcessor.process(audioSamples: samples, source: .microphone)
+            }
         } else {
             // Handle Webcam Video
         }
@@ -155,7 +178,20 @@ extension CaptureService: AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptur
         case .screen:
              break
         case .audio:
-             break
+            guard let pcmBuffer = AudioUtils.convert(sampleBuffer: sampleBuffer),
+                  let floatChannelData = pcmBuffer.floatChannelData else { return }
+            
+            let frameLength = Int(pcmBuffer.frameLength)
+            let channelData = floatChannelData[0]
+            
+            var samples = [Float](repeating: 0, count: frameLength)
+            for i in 0..<frameLength {
+                samples[i] = channelData[i]
+            }
+            
+            Task {
+                await self.audioProcessor.process(audioSamples: samples, source: .system)
+            }
         case .microphone:
              break
         @unknown default:

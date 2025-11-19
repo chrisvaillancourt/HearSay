@@ -2,9 +2,16 @@ import SwiftUI
 
 struct RecordingView: View {
     @Binding var isRecording: Bool
+    @ObservedObject var captureService: CaptureService
     
     var body: some View {
         VStack {
+            if let error = captureService.error {
+                Text("Error: \(error)")
+                    .foregroundStyle(.red)
+                    .padding()
+            }
+            
             Text("Recording in Progress")
                 .font(.largeTitle)
             
@@ -16,6 +23,7 @@ struct RecordingView: View {
                 
             HStack {
                 Button("Stop Recording") {
+                    captureService.stopCapture()
                     isRecording = false
                 }
                 .buttonStyle(.borderedProminent)
@@ -24,5 +32,8 @@ struct RecordingView: View {
             }
         }
         .padding()
+        .task {
+            await captureService.startCapture()
+        }
     }
 }

@@ -55,9 +55,19 @@ class PermissionsService: ObservableObject {
     }
     
     private func checkScreenRecordingAccess() {
-        // CGPreflightScreenCaptureAccess is deprecated but still the standard way to check efficiently
-        // without triggering a full stream setup.
-        hasScreenRecordingAccess = CGPreflightScreenCaptureAccess()
+        // Modern check for macOS 15+
+        Task {
+            do {
+                _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                await MainActor.run {
+                    self.hasScreenRecordingAccess = true
+                }
+            } catch {
+                await MainActor.run {
+                    self.hasScreenRecordingAccess = false
+                }
+            }
+        }
     }
     
     func openSystemSettings() {

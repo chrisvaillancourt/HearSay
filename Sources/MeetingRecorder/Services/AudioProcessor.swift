@@ -9,20 +9,39 @@ enum AudioSource {
 actor AudioProcessor {
     // Configuration
     private let sampleRate: Double = 16000.0 // Whisper usually likes 16kHz
-    private let channelCount: UInt32 = 1 // Processing mono for transcription mostly, but spec says Stereo for diarization.
-    // Let's target Stereo 16kHz: Left=System, Right=Mic
+    private let channelCount: UInt32 = 1
     
+    private var transcriptionService: TranscriptionService?
+    
+    // Simplified mixing: We just append to a single buffer for now.
+    // In a real app, we'd need a circular buffer and timestamp alignment.
     private var audioBuffer = [Float]()
+    private let bufferSizeThreshold = 16000 * 30 // Process every 30 seconds of audio
     
-    func process(sampleBuffer: CMSampleBuffer, source: AudioSource) {
-        guard let _ = AudioUtils.convert(sampleBuffer: sampleBuffer) else { return }
+    func setTranscriptionService(_ service: TranscriptionService) {
+        self.transcriptionService = service
+    }
+    
+    func process(audioSamples: [Float], source: AudioSource) {
+        // Simplified mixing: We just append to a single buffer for now.
         
-        // Here we would implement the complex mixing logic:
-        // 1. Resample to target rate (16kHz) if necessary.
-        // 2. Sync based on timestamps.
-        // 3. Map to channels.
+        // Naive downsampling/mixing if needed. 
+        // For now, assuming input is already close to what we want or just taking it raw.
         
-        // For prototype: Just log/drop
-        // print("Received \(pcmBuffer.frameLength) frames from \(source)")
+        audioBuffer.append(contentsOf: audioSamples)
+        
+        // Check if we have enough data to transcribe
+        if audioBuffer.count >= bufferSizeThreshold {
+            let chunkToProcess = Array(audioBuffer.prefix(bufferSizeThreshold))
+            audioBuffer.removeFirst(bufferSizeThreshold)
+            
+            Task {
+                do {
+                    _ = try await transcriptionService?.transcribe(audioSamples: chunkToProcess)
+                } catch {
+                    print("Transcription error: \(error)")
+                }
+            }
+        }
     }
 }
