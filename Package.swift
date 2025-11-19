@@ -13,6 +13,9 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/argmaxinc/WhisperKit", from: "0.9.0"),
+        // Using compatible versions that share swift-syntax 600.0.0
+        .package(url: "https://github.com/realm/SwiftLint", exact: "0.58.1"),
+        .package(url: "https://github.com/apple/swift-format", exact: "600.0.0"),
     ],
     targets: [
         .executableTarget(
@@ -22,6 +25,9 @@ let package = Package(
             ],
             exclude: [
                 "Info.plist"
+            ],
+            plugins: [
+                .plugin(name: "SwiftLintBuildToolPlugin", package: "SwiftLint"),
             ]
         ),
         .testTarget(

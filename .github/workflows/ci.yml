@@ -29,8 +29,15 @@ jobs:
         xcodebuild -version
         swift --version
 
+    - name: Check Code Formatting
+      run: make format-check
+
+    - name: Run SwiftLint
+      run: make lint
+
     - name: Build
       run: make build
 
     - name: Run Tests
       run: make test
+

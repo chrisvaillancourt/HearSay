@@ -5,7 +5,7 @@ BUNDLE_NAME := $(APP_NAME).app
 CONFIG := release
 BUILD_DIR := .build/arm64-apple-macosx/$(CONFIG)
 
-.PHONY: all bootstrap build test clean lint bundle run
+.PHONY: all bootstrap build test bundle clean lint format format-check docs run
 
 all: build
 
@@ -46,3 +46,25 @@ clean:
 
 # CI: The exact command run by GitHub Actions
 ci: bootstrap build test
+
+# Lint: Run SwiftLint manually
+lint:
+	@echo "Running SwiftLint..."
+	swift package plugin swiftlint
+
+# Format: Auto-format code with swift-format
+format:
+	@echo "Formatting code..."
+	swift package plugin --allow-writing-to-package-directory format-source-code Sources Tests
+
+# Format Check: Verify code formatting without changes
+format-check:
+	@echo "Checking code formatting..."
+	swift package plugin lint-source-code Sources Tests
+
+# Docs: Generate documentation with Swift-DocC
+docs:
+	@echo "Generating documentation..."
+	swift package generate-documentation --target MeetingRecorder
+
+

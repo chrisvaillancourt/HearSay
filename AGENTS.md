@@ -4,7 +4,11 @@
 - **Build:** `make build` or `swift build`
 - **Test:** `make test` or `swift test`
 - **Bundle:** `make bundle` (Required for testing entitlements/sandbox)
-- **Lint:** Follow standard Swift conventions.
+- **Lint:** `make lint` (SwiftLint runs automatically on build)
+- **Format:** `make format` (Auto-format code)
+- **Format Check:** `make format-check` (Verify formatting without changes)
+- **Docs:** `make docs` (Generate Swift-DocC documentation)
+
 
 ## Code Style & Conventions
 - **Language:** Swift & SwiftUI (macOS 15+).
