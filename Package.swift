@@ -19,6 +19,9 @@ let package = Package(
             name: "MeetingRecorder",
             dependencies: [
                 .product(name: "WhisperKit", package: "WhisperKit"),
+            ],
+            exclude: [
+                "Info.plist"
             ]
         ),
         .testTarget(
