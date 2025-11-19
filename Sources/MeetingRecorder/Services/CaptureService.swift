@@ -151,7 +151,8 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
 }
 
 extension CaptureService: AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptureVideoDataOutputSampleBufferDelegate,
-    SCStreamOutput {
+    SCStreamOutput
+{
     nonisolated func captureOutput(
         _ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection
     ) {

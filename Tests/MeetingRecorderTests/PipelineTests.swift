@@ -45,7 +45,7 @@ struct PipelineTests {
                 let blockBuffer = try CMBlockBuffer(length: 1024 * 4, flags: .assureMemoryNow)
                 CMSampleBufferSetDataBuffer(buffer, newValue: blockBuffer)
             } catch {
-                #expect(Bool(false), \"Failed to create block buffer: \\(error)\")
+                #expect(Bool(false), "Failed to create block buffer: \(error)")
                 return
             }
 

@@ -50,7 +50,7 @@ ci: bootstrap build test
 # Lint: Run SwiftLint manually
 lint:
 	@echo "Running SwiftLint..."
-	swift package plugin swiftlint
+	swift package plugin --allow-writing-to-package-directory swiftlint
 
 # Format: Auto-format code with swift-format
 format:
