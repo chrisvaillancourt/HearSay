@@ -4,3 +4,7 @@
 .swiftpm
 *.xcodeproj
 *.xcworkspace
+*.app
+DerivedData/
+*.swp
+*.swo

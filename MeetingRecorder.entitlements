@@ -16,5 +16,9 @@
     <true/>
     <key>com.apple.security.files.movies.read-write</key>
     <true/>
+    <key>com.apple.security.files.absolute-path.read-only</key>
+    <array>
+        <string>/</string>
+    </array>
 </dict>
 </plist>

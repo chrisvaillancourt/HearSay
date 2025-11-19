@@ -26,62 +26,112 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
     @MainActor @Published var isRecording = false
     @MainActor @Published var error: String?
 
+    private var isInitialized = false
+    
     override init() {
         super.init()
-        // Initialize services
         Task {
-            await audioProcessor.setTranscriptionService(transcriptionService)
-            try? await transcriptionService.initialize()
-        }
-        setupAVSession()
-    }
-
-    private func setupAVSession() {
-        sessionQueue.async { [weak self] in
-            guard let self = self else { return }
-            self.avSession.beginConfiguration()
-
-            // 1. Microphone
-            if let mic = AVCaptureDevice.default(for: .audio) {
-                do {
-                    let micInput = try AVCaptureDeviceInput(device: mic)
-                    if self.avSession.canAddInput(micInput) {
-                        self.avSession.addInput(micInput)
-
-                        let audioOutput = AVCaptureAudioDataOutput()
-                        audioOutput.setSampleBufferDelegate(self, queue: self.audioQueue)
-                        if self.avSession.canAddOutput(audioOutput) {
-                            self.avSession.addOutput(audioOutput)
-                        }
-                    }
-                } catch {
-                    self.logger.error("Failed to create audio input: \(error.localizedDescription)")
-                }
-            }
-
-            // 2. Webcam
-            if let camera = AVCaptureDevice.default(for: .video) {
-                do {
-                    let camInput = try AVCaptureDeviceInput(device: camera)
-                    if self.avSession.canAddInput(camInput) {
-                        self.avSession.addInput(camInput)
-
-                        let videoOutput = AVCaptureVideoDataOutput()
-                        videoOutput.setSampleBufferDelegate(self, queue: self.videoQueue)
-                        if self.avSession.canAddOutput(videoOutput) {
-                            self.avSession.addOutput(videoOutput)
-                        }
-                    }
-                } catch {
-                    self.logger.error("Failed to create video input: \(error.localizedDescription)")
-                }
-            }
-
-            self.avSession.commitConfiguration()
+            try? await setupAVSession()
         }
     }
+    
+    func initializeServices() async throws {
+        guard !isInitialized else { return }
+        
+        await audioProcessor.setTranscriptionService(transcriptionService)
+        try await transcriptionService.initialize()
+        
+        isInitialized = true
+    }
 
-    func startCapture() async {
+    private func setupAVSession() async throws {
+        return try await withCheckedThrowingContinuation { continuation in
+            sessionQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: NSError(domain: "CaptureService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Self is nil"]))
+                    return
+                }
+                
+                self.avSession.beginConfiguration()
+
+                // 1. Microphone
+                if let mic = AVCaptureDevice.default(for: .audio) {
+                    do {
+                        let micInput = try AVCaptureDeviceInput(device: mic)
+                        if self.avSession.canAddInput(micInput) {
+                            self.avSession.addInput(micInput)
+
+                            let audioOutput = AVCaptureAudioDataOutput()
+                            audioOutput.setSampleBufferDelegate(self, queue: self.audioQueue)
+                            if self.avSession.canAddOutput(audioOutput) {
+                                self.avSession.addOutput(audioOutput)
+                            }
+                        }
+                    } catch {
+                        self.logger.error("Failed to create audio input: \(error.localizedDescription)")
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                }
+
+                // 2. Webcam
+                if let camera = AVCaptureDevice.default(for: .video) {
+                    do {
+                        let camInput = try AVCaptureDeviceInput(device: camera)
+                        if self.avSession.canAddInput(camInput) {
+                            self.avSession.addInput(camInput)
+
+                            let videoOutput = AVCaptureVideoDataOutput()
+                            videoOutput.setSampleBufferDelegate(self, queue: self.videoQueue)
+                            if self.avSession.canAddOutput(videoOutput) {
+                                self.avSession.addOutput(videoOutput)
+                            }
+                        }
+                    } catch {
+                        self.logger.error("Failed to create video input: \(error.localizedDescription)")
+                        // Don't fail for video errors, audio is more important
+                    }
+                }
+
+                self.avSession.commitConfiguration()
+                continuation.resume()
+            }
+        }
+    }
+    
+    private func startAVSession() async throws {
+        return try await withCheckedThrowingContinuation { continuation in
+            sessionQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: NSError(domain: "CaptureService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Self is nil"]))
+                    return
+                }
+                
+                if !self.avSession.isRunning {
+                    self.avSession.startRunning()
+                    Task { @MainActor in
+                        self.isRecording = true
+                    }
+                }
+                continuation.resume()
+            }
+        }
+    }
+
+    func startCapture() async throws {
+        // Ensure services are initialized first
+        try await initializeServices()
+        
+        // Set up error handling
+        await audioProcessor.setErrorHandler { error in
+            Task { @MainActor in
+                self.error = "Transcription failed: \(error.localizedDescription)"
+            }
+        }
+        
+        // Wait for AVSession setup to complete
+        try await setupAVSession()
+        
         // Start SCStream
         do {
             try await startScreenCapture()
@@ -90,17 +140,11 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
             await MainActor.run {
                 self.error = "Screen capture failed: \(error.localizedDescription)"
             }
+            throw error
         }
 
-        sessionQueue.async { [weak self] in
-            guard let self = self else { return }
-            if !self.avSession.isRunning {
-                self.avSession.startRunning()
-                Task { @MainActor in
-                    self.isRecording = true
-                }
-            }
-        }
+        // Start AVSession
+        try await startAVSession()
     }
 
     func stopCapture() {
@@ -117,6 +161,12 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
                 try? await currentStream.stopCapture()
             }
         }
+        
+        // Clear audio buffer when stopping
+        Task {
+            await audioProcessor.reset()
+        }
+        
         Task { @MainActor in
             isRecording = false
         }
@@ -165,10 +215,7 @@ extension CaptureService: AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptur
             let channelData = floatChannelData[0]
 
             // Create a copy of the data to pass to the actor
-            var samples = [Float](repeating: 0, count: frameLength)
-            for i in 0..<frameLength {
-                samples[i] = channelData[i]
-            }
+            let samples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
 
             Task {
                 await self.audioProcessor.process(audioSamples: samples, source: .microphone)
@@ -192,10 +239,7 @@ extension CaptureService: AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptur
             let frameLength = Int(pcmBuffer.frameLength)
             let channelData = floatChannelData[0]
 
-            var samples = [Float](repeating: 0, count: frameLength)
-            for i in 0..<frameLength {
-                samples[i] = channelData[i]
-            }
+            let samples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
 
             Task {
                 await self.audioProcessor.process(audioSamples: samples, source: .system)

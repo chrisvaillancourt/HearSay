@@ -33,7 +33,11 @@ struct RecordingView: View {
         }
         .padding()
         .task {
-            await captureService.startCapture()
+            do {
+                try await captureService.startCapture()
+            } catch {
+                print("Failed to start capture: \(error)")
+            }
         }
     }
 }
