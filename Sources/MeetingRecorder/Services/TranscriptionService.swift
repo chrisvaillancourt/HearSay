@@ -9,14 +9,14 @@ actor TranscriptionService {
     func initialize() async throws {
         guard !isInitialized else { return }
 
-        // Initialize WhisperKit with default settings which downloads the recommended model
+        // Initialize WhisperKit with default settings which downloads recommended model
         // or use a specific one if needed.
         // Note: This might download the model on first run.
         whisperKit = try await WhisperKit(verbose: true)
         isInitialized = true
     }
 
-    func transcribe(audioSamples: [Float]) async throws -> [TranscriptionResult] {
+    func transcribe(audioSamples: [Float], source: AudioSource) async throws -> [TranscriptSegment] {
         guard let whisperKit = whisperKit else {
             throw NSError(
                 domain: "TranscriptionService", code: 1,
@@ -24,9 +24,17 @@ actor TranscriptionService {
         }
 
         let results = try await whisperKit.transcribe(audioArray: audioSamples)
-        return results
+        
+        // Create transcript segments with source tracking for diarization
+        // For now, create a simple segment with the full transcription text
+        // TODO: Enhance with proper timing when WhisperKit API is clarified
+        return results.map { result in
+            TranscriptSegment(
+                startTime: 0.0,
+                endTime: Double(audioSamples.count) / 16000.0, // Approximate duration
+                text: result.text,
+                speakerLabel: source == .microphone ? "Microphone" : "System Audio"
+            )
+        }
     }
 }
-
-// Helper struct to map WhisperKit results if needed, though WhisperKit likely returns its own types.
-// We will map them to our Model types in the calling layer.

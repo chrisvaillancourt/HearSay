@@ -11,6 +11,7 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
     // Accessed on sessionQueue
     private let avSession = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "com.meetingrecorder.sessionQueue")
+    private let initializationQueue = DispatchQueue(label: "com.meetingrecorder.initializationQueue")
 
     private let audioQueue = DispatchQueue(label: "com.meetingrecorder.audio")
     private let videoQueue = DispatchQueue(label: "com.meetingrecorder.video")
@@ -30,19 +31,48 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
     
     override init() {
         super.init()
+        // Initialize services synchronously
         Task {
-            try? await setupAVSession()
+            try await setupAVSession()
         }
     }
     
     func initializeServices() async throws {
-        guard !isInitialized else { return }
-        
-        await audioProcessor.setTranscriptionService(transcriptionService)
-        try await transcriptionService.initialize()
-        
-        isInitialized = true
+        return try await withCheckedThrowingContinuation { continuation in
+            initializationQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: NSError(domain: "CaptureService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Self is nil"]))
+                    return
+                }
+                
+                guard !self.isInitialized else {
+                    continuation.resume()
+                    return
+                }
+                
+                Task {
+                    do {
+                        await self.audioProcessor.setTranscriptionService(self.transcriptionService)
+                        try await self.transcriptionService.initialize()
+                        
+                        // Set up error handling once
+                        await self.audioProcessor.setErrorHandler { [weak self] error in
+                            Task { @MainActor [weak self] in
+                                self?.error = "Transcription failed: \(error.localizedDescription)"
+                            }
+                        }
+                        
+                        self.isInitialized = true
+                        continuation.resume()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
     }
+    
+
 
     private func setupAVSession() async throws {
         return try await withCheckedThrowingContinuation { continuation in
@@ -121,13 +151,6 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
     func startCapture() async throws {
         // Ensure services are initialized first
         try await initializeServices()
-        
-        // Set up error handling
-        await audioProcessor.setErrorHandler { error in
-            Task { @MainActor in
-                self.error = "Transcription failed: \(error.localizedDescription)"
-            }
-        }
         
         // Wait for AVSession setup to complete
         try await setupAVSession()

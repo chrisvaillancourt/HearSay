@@ -28,7 +28,7 @@ final class MeetingSession {
 }
 
 @Model
-final class TranscriptSegment {
+final class TranscriptSegment: @unchecked Sendable {
     var startTime: TimeInterval
     var endTime: TimeInterval
     var text: String

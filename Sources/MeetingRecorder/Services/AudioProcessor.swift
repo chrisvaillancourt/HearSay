@@ -31,7 +31,7 @@ actor AudioProcessor {
         self.transcriptionService = service
     }
     
-    func setErrorHandler(_ handler: @escaping (Error) -> Void) {
+    func setErrorHandler(_ handler: @escaping (any Error) -> Void) {
         self.errorHandler = handler
     }
     
@@ -69,20 +69,45 @@ actor AudioProcessor {
     }
     
     private func resampleAudio(_ samples: [Float], source: AudioSource) async throws -> [Float] {
-        // TODO: Implement proper sample rate detection and resampling
-        // For now, assume input is already at 16kHz or close enough
-        // This is a placeholder that should be enhanced with AVAudioConverter
+        // Detect input sample rate based on source
+        let inputSampleRate = detectSampleRate(for: source)
         
-        // Log the source for debugging
-        logger.info("Processing audio from \(String(describing: source)) source")
+        // If already at target rate, no conversion needed
+        if abs(inputSampleRate - self.targetSampleRate) < 1.0 {
+            logger.info("Audio from \(String(describing: source)) already at target rate (\(inputSampleRate)Hz)")
+            return samples
+        }
         
-        // For now, return samples as-is (assuming they're already 16kHz)
-        // In a production implementation, we would:
-        // 1. Detect input sample rate from CMSampleBuffer
-        // 2. Create AVAudioConverter from input rate to 16kHz
-        // 3. Convert and return resampled samples
+        // Use linear interpolation resampling to avoid AVAudioConverter complexity
+        let ratio = self.targetSampleRate / inputSampleRate
+        let outputLength = Int(Double(samples.count) * ratio)
         
-        return samples
+        guard outputLength > 0 else {
+            logger.warning("Resampling would result in empty output, returning original samples")
+            return samples
+        }
+        
+        var resampledSamples: [Float] = []
+        resampledSamples.reserveCapacity(outputLength)
+        
+        for i in 0..<outputLength {
+            let sourceIndex = Double(i) / ratio
+            let lowerIndex = Int(sourceIndex)
+            let upperIndex = min(lowerIndex + 1, samples.count - 1)
+            let fraction = sourceIndex - Double(lowerIndex)
+            
+            if lowerIndex < samples.count {
+                let lowerSample = samples[lowerIndex]
+                let upperSample = samples[upperIndex]
+                let interpolatedSample = lowerSample + Float(fraction) * (upperSample - lowerSample)
+                resampledSamples.append(interpolatedSample)
+            }
+        }
+        
+        let message = "Successfully resampled \(samples.count) samples from \(inputSampleRate)Hz to \(self.targetSampleRate)Hz using linear interpolation (\(resampledSamples.count) samples)"
+        logger.info("\(message)")
+        
+        return resampledSamples
     }
     
     private func detectSampleRate(for source: AudioSource) -> Double {
@@ -155,7 +180,7 @@ actor AudioProcessor {
     
     private func transcribeChunk(_ chunk: [Float], source: AudioSource) async {
         do {
-            let results = try await transcriptionService?.transcribe(audioSamples: chunk)
+            let results = try await transcriptionService?.transcribe(audioSamples: chunk, source: source)
             logger.info("Transcription completed for \(String(describing: source)) audio: \(results?.count ?? 0) segments")
         } catch {
             logger.error("Transcription error for \(String(describing: source)) audio: \(error.localizedDescription)")
@@ -173,6 +198,7 @@ actor AudioProcessor {
 enum AudioProcessorError: Error, LocalizedError {
     case failedToCreateFormat
     case failedToCreateBuffer
+    case failedToCreateResampler
     case resamplingFailed
     
     var errorDescription: String? {
@@ -181,6 +207,8 @@ enum AudioProcessorError: Error, LocalizedError {
             return "Failed to create audio format"
         case .failedToCreateBuffer:
             return "Failed to create audio buffer"
+        case .failedToCreateResampler:
+            return "Failed to create audio resampler"
         case .resamplingFailed:
             return "Audio resampling failed"
         }
