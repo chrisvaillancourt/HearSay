@@ -1,4 +1,5 @@
 import SwiftUI
+import OSLog
 
 struct RecordingView: View {
     @Binding var isRecording: Bool
@@ -36,7 +37,7 @@ struct RecordingView: View {
             do {
                 try await captureService.startCapture()
             } catch {
-                print("Failed to start capture: \(error)")
+                Logger(subsystem: "MeetingRecorder", category: "Capture").error("Failed to start capture: \(error)")
             }
         }
     }

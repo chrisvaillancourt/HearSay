@@ -24,7 +24,7 @@ actor TranscriptionService {
         }
 
         let results = try await whisperKit.transcribe(audioArray: audioSamples)
-        
+
         // Create transcript segments with source tracking for diarization
         // For now, create a simple segment with the full transcription text
         // TODO: Enhance with proper timing when WhisperKit API is clarified

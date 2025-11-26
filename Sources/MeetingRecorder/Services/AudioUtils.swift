@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import OSLog
 
 class AudioUtils {
     static func convert(sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
@@ -37,7 +38,7 @@ class AudioUtils {
                 }
             }
         } catch {
-            print("Error converting buffer: \(error)")
+            Logger(subsystem: "MeetingRecorder", category: "AudioUtils").error("Error converting buffer: \(error)")
             return nil
         }
 
