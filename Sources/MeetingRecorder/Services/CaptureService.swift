@@ -3,6 +3,7 @@ import CoreImage
 import Foundation
 import OSLog
 @preconcurrency import ScreenCaptureKit
+import SwiftData
 
 class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
     private let logger = Logger(subsystem: "com.meetingrecorder", category: "CaptureService")
@@ -22,6 +23,10 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
     // Audio Processing
     let audioProcessor = AudioProcessor()
     let transcriptionService = TranscriptionService()
+    
+    // Session Management
+    private let sessionManager: SessionManager
+    private var mediaWriter: MediaWriter?
 
     // State
     @MainActor @Published var isRecording = false
@@ -29,7 +34,9 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
 
     private var isInitialized = false
 
-    override init() {
+    @MainActor
+    init(modelContext: ModelContext) {
+        self.sessionManager = SessionManager(modelContext: modelContext)
         super.init()
         // Initialize services synchronously
         Task {
