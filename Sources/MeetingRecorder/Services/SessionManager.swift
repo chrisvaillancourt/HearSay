@@ -36,6 +36,22 @@ final class SessionManager: ObservableObject {
         logger.info("Started new session: \(session.title)")
     }
     
+    /// Adds transcript segments to the current session
+    func addSegments(_ segments: [TranscriptSegment]) {
+        guard let session = currentSession else {
+            logger.warning("Cannot add segments: no active session")
+            return
+        }
+
+        for segment in segments {
+            segment.session = session
+            session.segments.append(segment)
+            modelContext.insert(segment)
+        }
+
+        logger.info("Added \(segments.count) segments to session: \(session.title)")
+    }
+
     /// Ends the current session and saves it
     func endSession() throws {
         guard isRecording, let session = currentSession else {

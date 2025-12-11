@@ -75,6 +75,13 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
                             }
                         }
 
+                        // Set up segment persistence handler
+                        await self.audioProcessor.setSegmentHandler { [weak self] segments in
+                            Task { @MainActor [weak self] in
+                                self?.sessionManager.addSegments(segments)
+                            }
+                        }
+
                         self.isInitialized = true
                         continuation.resume()
                     } catch {

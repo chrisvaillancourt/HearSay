@@ -25,6 +25,9 @@ actor AudioProcessor {
     // Error handling
     private var errorHandler: ((Error) -> Void)?
 
+    // Segment persistence handler
+    private var segmentHandler: (([TranscriptSegment]) -> Void)?
+
     private var transcriptionService: TranscriptionService?
 
     func setTranscriptionService(_ service: TranscriptionService) {
@@ -33,6 +36,10 @@ actor AudioProcessor {
 
     func setErrorHandler(_ handler: @escaping (any Error) -> Void) {
         self.errorHandler = handler
+    }
+
+    func setSegmentHandler(_ handler: @escaping ([TranscriptSegment]) -> Void) {
+        self.segmentHandler = handler
     }
 
     func reset() {
@@ -184,8 +191,16 @@ actor AudioProcessor {
 
     private func transcribeChunk(_ chunk: [Float], source: AudioSource) async {
         do {
-            let results = try await transcriptionService?.transcribe(audioSamples: chunk, source: source)
-            logger.info("Transcription completed for \(String(describing: source)) audio: \(results?.count ?? 0) segments")
+            guard let segments = try await transcriptionService?.transcribe(audioSamples: chunk, source: source) else {
+                return
+            }
+
+            logger.info("Transcription completed for \(String(describing: source)) audio: \(segments.count) segments")
+
+            // Persist segments via handler if available
+            if !segments.isEmpty {
+                segmentHandler?(segments)
+            }
         } catch {
             logger.error("Transcription error for \(String(describing: source)) audio: \(error.localizedDescription)")
             errorHandler?(error)
