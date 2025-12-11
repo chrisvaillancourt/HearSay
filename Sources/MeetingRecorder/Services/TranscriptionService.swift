@@ -25,16 +25,17 @@ actor TranscriptionService {
 
         let results = try await whisperKit.transcribe(audioArray: audioSamples)
 
-        // Create transcript segments with source tracking for diarization
-        // For now, create a simple segment with the full transcription text
-        // TODO: Enhance with proper timing when WhisperKit API is clarified
-        return results.map { result in
-            TranscriptSegment(
-                startTime: 0.0,
-                endTime: Double(audioSamples.count) / 16000.0, // Approximate duration
-                text: result.text,
-                speakerLabel: source == .microphone ? "Microphone" : "System Audio"
-            )
+        // Extract segments from all transcription results with proper timestamps
+        let speakerLabel = source == .microphone ? "Microphone" : "System Audio"
+        return results.flatMap { result in
+            result.segments.map { segment in
+                TranscriptSegment(
+                    startTime: Double(segment.start),
+                    endTime: Double(segment.end),
+                    text: segment.text,
+                    speakerLabel: speakerLabel
+                )
+            }
         }
     }
 }
