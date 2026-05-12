@@ -1,5 +1,5 @@
-import Testing
 import Foundation
+import Testing
 
 @testable import MeetingRecorder
 
@@ -12,7 +12,7 @@ struct CodeIssuesValidationTests {
         let processor = AudioProcessor()
 
         // Simulate sending 48kHz audio (typical for ScreenCaptureKit)
-        let samples48kHz = [Float](repeating: 0.1, count: 4800) // 0.1 second at 48kHz
+        let samples48kHz = [Float](repeating: 0.1, count: 4800)  // 0.1 second at 48kHz
 
         // The implementation now resamples from 48kHz to 16kHz using linear interpolation
         await processor.process(audioSamples: samples48kHz, source: .system)
@@ -150,8 +150,10 @@ struct SetupIssuesValidationTests {
         let infoPlistPath = "\(currentDirectory)/Sources/MeetingRecorder/Info.plist"
 
         guard let plistData = FileManager.default.contents(atPath: infoPlistPath),
-              let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil) as? [String: Any],
-              let bundleIdentifier = plist["CFBundleIdentifier"] as? String else {
+            let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil)
+                as? [String: Any],
+            let bundleIdentifier = plist["CFBundleIdentifier"] as? String
+        else {
             #expect(Bool(false), "Could not read bundle identifier from Info.plist")
             return
         }
@@ -168,7 +170,8 @@ struct SetupIssuesValidationTests {
         let entitlementsPath = "\(currentDirectory)/MeetingRecorder.entitlements"
 
         guard let entitlementsData = FileManager.default.contents(atPath: entitlementsPath),
-              let entitlementsString = String(data: entitlementsData, encoding: .utf8) else {
+            let entitlementsString = String(data: entitlementsData, encoding: .utf8)
+        else {
             #expect(Bool(false), "Could not read entitlements file")
             return
         }
@@ -187,7 +190,8 @@ struct SetupIssuesValidationTests {
         let gitignorePath = "\(currentDirectory)/.gitignore"
 
         guard let gitignoreData = FileManager.default.contents(atPath: gitignorePath),
-              let gitignoreContent = String(data: gitignoreData, encoding: .utf8) else {
+            let gitignoreContent = String(data: gitignoreData, encoding: .utf8)
+        else {
             #expect(Bool(false), "Could not read .gitignore file")
             return
         }
@@ -202,6 +206,7 @@ struct SetupIssuesValidationTests {
 struct SummaryValidationTests {
     @Test("Generate comprehensive issue summary")
     func generateIssueSummary() async throws {
+        // swiftlint:disable no_print
         print("\n" + String(repeating: "=", count: 50))
         print("PR COMMENT ISSUES VALIDATION SUMMARY")
         print(String(repeating: "=", count: 50))
@@ -242,6 +247,7 @@ struct SummaryValidationTests {
 
         print("\n🚀 READY FOR PRODUCTION:")
         print("All 12 PR issues have been successfully resolved!")
+        // swiftlint:enable no_print
 
         // This test always passes - it's for documentation
         #expect(Bool(true), "Issue summary generated successfully")

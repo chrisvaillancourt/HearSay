@@ -1,8 +1,9 @@
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.modelContext)
+    private var modelContext
     @State private var captureService: CaptureService?
     @State private var isRecording = false
 
@@ -16,13 +17,16 @@ struct ContentView: View {
                 SessionListView()
                     .toolbar {
                         ToolbarItem(placement: .automatic) {
-                            Button(action: {
-                                initializeCaptureService()
-                                isRecording = true
-                            }) {
-                                Label("Start Recording", systemImage: "record.circle")
-                                    .foregroundStyle(.red)
-                            }
+                            Button(
+                                action: {
+                                    initializeCaptureService()
+                                    isRecording = true
+                                },
+                                label: {
+                                    Label("Start Recording", systemImage: "record.circle")
+                                        .foregroundStyle(.red)
+                                }
+                            )
                         }
                     }
             }
@@ -33,7 +37,7 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private func initializeCaptureService() {
         captureService = CaptureService(modelContext: modelContext)
     }

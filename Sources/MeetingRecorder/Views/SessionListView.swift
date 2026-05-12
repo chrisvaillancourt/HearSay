@@ -2,8 +2,10 @@ import SwiftData
 import SwiftUI
 
 struct SessionListView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \MeetingSession.dateRecorded, order: .reverse) private var sessions: [MeetingSession]
+    @Environment(\.modelContext)
+    private var modelContext
+    @Query(sort: \MeetingSession.dateRecorded, order: .reverse)
+    private var sessions: [MeetingSession]
     @State private var selection: MeetingSession?
 
     var body: some View {

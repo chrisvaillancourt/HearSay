@@ -1,206 +1,249 @@
 @preconcurrency import AVFoundation
 import CoreImage
+import CoreMedia
 import Foundation
 import OSLog
 @preconcurrency import ScreenCaptureKit
 import SwiftData
 
+/// CaptureService manages audio and video capture from microphone, webcam, and screen.
+///
+/// Concurrency Design:
+/// - Uses `@unchecked Sendable` with proper synchronization via `InitializationStateManager`
+/// - All mutable state accessed from nonisolated callbacks is protected by NSLock
+/// - AVCaptureSession is managed on a dedicated `sessionQueue`
+/// - Published properties are MainActor-isolated for UI binding
 class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
-    private let logger = Logger(subsystem: "com.meetingrecorder", category: "CaptureService")
+    let logger = Logger(subsystem: "com.meetingrecorder", category: "CaptureService")
 
-    // AVFoundation (Mic + Webcam)
-    // Accessed on sessionQueue
-    private let avSession = AVCaptureSession()
-    private let sessionQueue = DispatchQueue(label: "com.meetingrecorder.sessionQueue")
-    private let initializationQueue = DispatchQueue(label: "com.meetingrecorder.initializationQueue")
-
-    private let audioQueue = DispatchQueue(label: "com.meetingrecorder.audio")
-    private let videoQueue = DispatchQueue(label: "com.meetingrecorder.video")
-
-    // ScreenCaptureKit
-    private var stream: SCStream?
+    // AVFoundation (Mic + Webcam) - accessed on sessionQueue
+    let avSession = AVCaptureSession()
+    let sessionQueue = DispatchQueue(label: "com.meetingrecorder.sessionQueue")
+    let audioQueue = DispatchQueue(label: "com.meetingrecorder.audio")
+    let videoQueue = DispatchQueue(label: "com.meetingrecorder.video")
 
     // Audio Processing
     let audioProcessor = AudioProcessor()
     let transcriptionService = TranscriptionService()
-    
+
+    // Audio Mixing - combines system and microphone audio with proper synchronization
+    let audioMixer = AudioMixer()
+
+    // Timestamp tracking for accurate transcript-video correlation
+    let sessionTimestamp = SessionTimestamp()
+
     // Session Management
-    private let sessionManager: SessionManager
-    private var mediaWriter: MediaWriter?
+    let sessionManager: SessionManager
+
+    // Video Recording Pipeline
+    let videoCompositor = VideoCompositor(pipScale: 0.2, pipPadding: 20, pipCornerRadius: 12)
 
     // State
+    @MainActor @Published var captureState: CaptureState = .idle
     @MainActor @Published var isRecording = false
     @MainActor @Published var error: String?
+    @MainActor @Published var lastError: CaptureError?
+    @MainActor @Published var canRestart: Bool = false
 
-    private var isInitialized = false
+    // Thread-safe state management for all mutable state accessed from nonisolated callbacks
+    let stateManager = InitializationStateManager()
+
+    // Convenience accessors for stateManager properties
+    var stream: SCStream? {
+        get { stateManager.stream }
+        set { stateManager.stream = newValue }
+    }
+
+    var mediaWriter: MediaWriter? {
+        get { stateManager.mediaWriter }
+        set { stateManager.mediaWriter = newValue }
+    }
+
+    var useMixedAudio: Bool {
+        get { stateManager.useMixedAudio }
+        set { stateManager.useMixedAudio = newValue }
+    }
+
+    var captureWidth: Int {
+        get { stateManager.captureWidth }
+        set { stateManager.captureWidth = newValue }
+    }
+
+    var captureHeight: Int {
+        get { stateManager.captureHeight }
+        set { stateManager.captureHeight = newValue }
+    }
+
+    var isVideoRecordingEnabled: Bool {
+        get { stateManager.isVideoRecordingEnabled }
+        set { stateManager.isVideoRecordingEnabled = newValue }
+    }
 
     @MainActor
     init(modelContext: ModelContext) {
         self.sessionManager = SessionManager(modelContext: modelContext)
         super.init()
-        // Initialize services synchronously
-        Task {
-            try await setupAVSession()
-        }
+        // AVSession setup is deferred to startCapture() to avoid redundant initialization
+        setupAVSessionNotifications()
     }
 
-    func initializeServices() async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            initializationQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(
-                      throwing: NSError(
-                        domain: "CaptureService",
-                        code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Self is nil"]
-                      )
-                    )
-                    return
-                }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
-                guard !self.isInitialized else {
-                    continuation.resume()
-                    return
-                }
+    // MARK: - AVSession Notifications
 
-                Task {
-                    do {
-                        await self.audioProcessor.setTranscriptionService(self.transcriptionService)
-                        try await self.transcriptionService.initialize()
+    /// Sets up observers for AVCaptureSession runtime errors and interruptions
+    private func setupAVSessionNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAVSessionRuntimeError),
+            name: AVCaptureSession.runtimeErrorNotification,
+            object: avSession
+        )
 
-                        // Set up error handling once
-                        await self.audioProcessor.setErrorHandler { [weak self] error in
-                            Task { @MainActor [weak self] in
-                                self?.error = "Transcription failed: \(error.localizedDescription)"
-                            }
-                        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAVSessionInterrupted),
+            name: AVCaptureSession.wasInterruptedNotification,
+            object: avSession
+        )
 
-                        // Set up segment persistence handler
-                        await self.audioProcessor.setSegmentHandler { [weak self] segments in
-                            Task { @MainActor [weak self] in
-                                self?.sessionManager.addSegments(segments)
-                            }
-                        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAVSessionInterruptionEnded),
+            name: AVCaptureSession.interruptionEndedNotification,
+            object: avSession
+        )
+    }
 
-                        self.isInitialized = true
-                        continuation.resume()
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                }
+    @objc
+    private func handleAVSessionRuntimeError(_ notification: Notification) {
+        guard let error = notification.userInfo?[AVCaptureSessionErrorKey] as? AVError else {
+            logger.error("AVCaptureSession runtime error with unknown error")
+            return
+        }
+
+        logger.error("AVCaptureSession runtime error: \(error.localizedDescription)")
+        let captureError = CaptureError.avSessionRuntimeError(error.localizedDescription)
+        handleCaptureError(captureError)
+    }
+
+    @objc
+    private func handleAVSessionInterrupted(_ notification: Notification) {
+        logger.warning("AVCaptureSession interrupted")
+        handleCaptureError(.avSessionInterrupted("Session was interrupted"))
+    }
+
+    @objc
+    private func handleAVSessionInterruptionEnded(_ notification: Notification) {
+        logger.info("AVCaptureSession interruption ended")
+
+        Task { @MainActor in
+            if case .error(let error) = self.captureState,
+                case .avSessionInterrupted = error {
+                self.logger.info("Attempting to resume after interruption")
+                self.canRestart = true
             }
         }
     }
 
-    private func setupAVSession() async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            sessionQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(
-                      throwing: NSError(
-                        domain: "CaptureService",
-                        code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Self is nil"]
-                      )
-                    )
-                    return
-                }
+    // MARK: - Error Handling
 
-                self.avSession.beginConfiguration()
+    /// Centralized error handling - stops capture cleanly and updates state
+    func handleCaptureError(_ error: CaptureError) {
+        logger.error("Capture error occurred: \(error.localizedDescription ?? "Unknown error")")
 
-                // 1. Microphone
-                if let mic = AVCaptureDevice.default(for: .audio) {
-                    do {
-                        let micInput = try AVCaptureDeviceInput(device: mic)
-                        if self.avSession.canAddInput(micInput) {
-                            self.avSession.addInput(micInput)
+        stopCaptureInternal(dueToError: true)
 
-                            let audioOutput = AVCaptureAudioDataOutput()
-                            audioOutput.setSampleBufferDelegate(self, queue: self.audioQueue)
-                            if self.avSession.canAddOutput(audioOutput) {
-                                self.avSession.addOutput(audioOutput)
-                            }
-                        }
-                    } catch {
-                        self.logger.error("Failed to create audio input: \(error.localizedDescription)")
-                        continuation.resume(throwing: error)
-                        return
-                    }
-                }
-
-                // 2. Webcam
-                if let camera = AVCaptureDevice.default(for: .video) {
-                    do {
-                        let camInput = try AVCaptureDeviceInput(device: camera)
-                        if self.avSession.canAddInput(camInput) {
-                            self.avSession.addInput(camInput)
-
-                            let videoOutput = AVCaptureVideoDataOutput()
-                            videoOutput.setSampleBufferDelegate(self, queue: self.videoQueue)
-                            if self.avSession.canAddOutput(videoOutput) {
-                                self.avSession.addOutput(videoOutput)
-                            }
-                        }
-                    } catch {
-                        self.logger.error("Failed to create video input: \(error.localizedDescription)")
-                        // Don't fail for video errors, audio is more important
-                    }
-                }
-
-                self.avSession.commitConfiguration()
-                continuation.resume()
-            }
+        Task { @MainActor in
+            self.captureState = .error(error)
+            self.lastError = error
+            self.error = error.localizedDescription
+            self.isRecording = false
+            self.canRestart = error.isRecoverable
         }
     }
 
-    private func startAVSession() async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            sessionQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume(
-                      throwing: NSError(
-                        domain: "CaptureService",
-                        code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Self is nil"]
-                      )
-                    )
-                    return
-                }
-
-                if !self.avSession.isRunning {
-                    self.avSession.startRunning()
-                    Task { @MainActor in
-                        self.isRecording = true
-                    }
-                }
-                continuation.resume()
-            }
-        }
-    }
+    // MARK: - Capture Lifecycle
 
     func startCapture() async throws {
-        // Ensure services are initialized first
-        try await initializeServices()
+        await MainActor.run {
+            self.captureState = .starting
+            self.error = nil
+            self.lastError = nil
+            self.canRestart = false
+        }
 
-        // Wait for AVSession setup to complete
-        try await setupAVSession()
-
-        // Start SCStream
         do {
+            try await initializeServices()
+
+            // Start timestamp tracking session before starting capture
+            // so the first audio sample's timestamp becomes the reference point
+            await sessionTimestamp.startSession()
+            logger.info("Timestamp session started")
+
             try await startScreenCapture()
-        } catch {
-            logger.error("Failed to start screen capture: \(error.localizedDescription)")
+
+            if isVideoRecordingEnabled {
+                try await startVideoRecording()
+            }
+
+            try await startAVSession()
+
             await MainActor.run {
-                self.error = "Screen capture failed: \(error.localizedDescription)"
+                self.captureState = .recording
+            }
+        } catch {
+            logger.error("Failed to start capture: \(error.localizedDescription)")
+            await sessionTimestamp.endSession()
+            let captureError = CaptureError.initializationFailed(error.localizedDescription)
+            await MainActor.run {
+                self.captureState = .error(captureError)
+                self.error = captureError.localizedDescription
+                self.lastError = captureError
+                self.canRestart = captureError.isRecoverable
             }
             throw error
         }
-
-        // Start AVSession
-        try await startAVSession()
     }
 
+    /// Attempts to restart capture after an error
+    func restartCapture() async throws {
+        logger.info("Attempting to restart capture")
+
+        await MainActor.run {
+            self.captureState = .idle
+            self.error = nil
+            self.lastError = nil
+            self.canRestart = false
+        }
+
+        stateManager.resetAVSessionConfigured()
+        stream = nil
+
+        await audioProcessor.reset()
+        await audioMixer.reset()
+        videoCompositor.shutdown()
+
+        try await startCapture()
+    }
+
+    /// Public method to stop capture - used by UI
     func stopCapture() {
+        stopCaptureInternal(dueToError: false)
+
+        Task { @MainActor in
+            self.captureState = .idle
+            self.error = nil
+            self.canRestart = false
+        }
+    }
+
+    /// Internal method to stop capture - handles both user-initiated and error-driven stops
+    private func stopCaptureInternal(dueToError: Bool) {
+        logger.info("Stopping capture (dueToError: \(dueToError))")
+
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             if self.avSession.isRunning {
@@ -213,11 +256,18 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
             Task {
                 try? await currentStream.stopCapture()
             }
+            self.stream = nil
         }
 
-        // Clear audio buffer when stopping
         Task {
-            await audioProcessor.reset()
+            await stopVideoRecording()
+        }
+
+        Task {
+            await self.sessionTimestamp.endSession()
+            self.logger.info("Timestamp session ended")
+            await self.audioProcessor.reset()
+            await self.audioMixer.reset()
         }
 
         Task { @MainActor in
@@ -225,81 +275,38 @@ class CaptureService: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func startScreenCapture() async throws {
-        let content = try await SCShareableContent.current
-
-        guard let display = content.displays.first else {
-            throw NSError(domain: "CaptureService", code: 1, userInfo: [NSLocalizedDescriptionKey: "No display found"])
+    /// Clears the current error state - used after user acknowledges error
+    @MainActor
+    func clearError() {
+        if case .error = captureState {
+            captureState = .idle
         }
-
-        let excludedApps = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
-        let filter = SCContentFilter(display: display, excludingApplications: excludedApps, exceptingWindows: [])
-
-        let config = SCStreamConfiguration()
-        config.width = display.width * 2
-        config.height = display.height * 2
-        config.capturesAudio = true
-        config.sampleRate = 48000
-        config.channelCount = 2
-        config.showsCursor = true
-
-        let stream = SCStream(filter: filter, configuration: config, delegate: nil)
-        self.stream = stream
-
-        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
-        try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
-
-        try await stream.startCapture()
+        error = nil
+        lastError = nil
+        canRestart = false
     }
 }
 
-extension CaptureService: AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptureVideoDataOutputSampleBufferDelegate,
-    SCStreamOutput {
-    nonisolated func captureOutput(
-        _ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection
-    ) {
-        if output is AVCaptureAudioDataOutput {
-            guard let pcmBuffer = AudioUtils.convert(sampleBuffer: sampleBuffer),
-                let floatChannelData = pcmBuffer.floatChannelData
-            else { return }
+// MARK: - Audio Mixing Configuration
 
-            let frameLength = Int(pcmBuffer.frameLength)
-            let channelData = floatChannelData[0]
-
-            // Create a copy of the data to pass to the actor
-            let samples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
-
-            Task {
-                await self.audioProcessor.process(audioSamples: samples, source: .microphone)
-            }
-        } else {
-            // Handle Webcam Video
-        }
+extension CaptureService {
+    /// Enables or disables audio mixing.
+    /// When enabled, system and microphone audio are synchronized using CMClock alignment
+    /// and mixed into a stereo stream (Left=System, Right=Microphone) for improved diarization.
+    func setAudioMixingEnabled(_ enabled: Bool) {
+        useMixedAudio = enabled
+        logger.info("Audio mixing \(enabled ? "enabled" : "disabled")")
     }
 
-    nonisolated func stream(
-        _ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType
-    ) {
-        switch type {
-        case .screen:
-            break
-        case .audio:
-            guard let pcmBuffer = AudioUtils.convert(sampleBuffer: sampleBuffer),
-                let floatChannelData = pcmBuffer.floatChannelData
-            else { return }
+    /// Returns whether audio mixing is currently enabled
+    func isAudioMixingEnabled() -> Bool {
+        useMixedAudio
+    }
 
-            let frameLength = Int(pcmBuffer.frameLength)
-            let channelData = floatChannelData[0]
-
-            let samples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
-
-            Task {
-                await self.audioProcessor.process(audioSamples: samples, source: .system)
-            }
-        case .microphone:
-            break
-        @unknown default:
-            break
-        }
+    /// Returns diagnostic information about the audio mixer state
+    func getAudioMixerDiagnostics() async -> (bufferLevels: (system: Int, microphone: Int), isAligned: Bool) {
+        let levels = await audioMixer.getBufferLevels()
+        let aligned = await audioMixer.isClockAligned()
+        return (levels, aligned)
     }
 }
